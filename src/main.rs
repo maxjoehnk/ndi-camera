@@ -4,7 +4,7 @@ use color_eyre::eyre::Context;
 use libcamera::camera_manager::CameraManager;
 use libcamera::*;
 use libcamera::camera::{Camera, CameraConfiguration, CameraConfigurationStatus};
-use libcamera::framebuffer::AsFrameBuffer;
+use libcamera::framebuffer::{AsFrameBuffer, FrameMetadataStatus};
 use libcamera::framebuffer_allocator::{FrameBuffer, FrameBufferAllocator};
 use libcamera::framebuffer_map::MemoryMappedFrameBuffer;
 use libcamera::geometry::Size;
@@ -19,6 +19,7 @@ use tracing_subscriber::EnvFilter;
 mod rgb;
 mod bgr;
 mod yuyv;
+mod mjpeg;
 
 #[derive(Debug, Clone, Parser)]
 #[command(version)]
@@ -40,7 +41,7 @@ fn main() -> color_eyre::Result<()> {
         Box::new(bgr::BgrStream),
         Box::new(rgb::RgbStream),
         Box::new(yuyv::YuyvStream),
-        // TODO: Support MJPEG as alternative to YUYV
+        Box::new(mjpeg::MjpegStream),
     ];
 
     ndi::initialize()?;
@@ -140,15 +141,24 @@ fn main() -> color_eyre::Result<()> {
 
         let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&stream).unwrap();
         tracing::trace!("FrameBuffer metadata: {:#?}", framebuffer.metadata());
+        let frame_metadata_status = framebuffer.metadata().unwrap().status();
+        if frame_metadata_status != FrameMetadataStatus::Success {
+            tracing::error!("Frame metadata status: {:?}", frame_metadata_status);
+            req.reuse(ReuseFlag::REUSE_BUFFERS);
+            cam.queue_request(req).map_err(|(_, e)| e)?;
+
+            continue;
+        }
         let bytes_used = framebuffer.metadata().unwrap().planes().get(0).unwrap().bytes_used as usize;
 
         let planes = framebuffer.data();
+        tracing::trace!("Data Planes: {:?}", planes.len());
         let frame_data = planes.get(0).unwrap();
 
         tracing::debug!("Frame captured in {:?}", instant.elapsed());
         let instant = std::time::Instant::now();
 
-        let frame_info = camera_stream.capture_frame(&cfg, frame_data, &mut buffer)?;
+        let frame_info = camera_stream.capture_frame(&cfg, &frame_data[..bytes_used], &mut buffer)?;
 
         tracing::debug!("Converted to {:?} in {:?}", frame_info.video_type, instant.elapsed());
 
@@ -167,7 +177,7 @@ fn main() -> color_eyre::Result<()> {
             0,
             frame_info.stride as i32,
             None,
-            &mut buffer[..bytes_used],
+            &mut buffer,
         );
         ndi_sender.send_video(&video_data);
 
