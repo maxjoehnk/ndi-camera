@@ -9,6 +9,10 @@ use super::{supports_configuration, CameraStream, FrameInfo};
 pub struct RgbStream;
 
 impl CameraStream for RgbStream {
+    fn name(&self) -> &'static str {
+        "rgb"
+    }
+
     fn is_supported(&self, camera: &Camera) -> Option<CameraConfiguration> {
         supports_configuration(camera, PixelFormat::from_str("RGB888").unwrap())
     }

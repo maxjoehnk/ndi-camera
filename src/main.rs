@@ -28,9 +28,11 @@ pub struct Flags {
     #[arg(long, default_value_t = 1080)]
     pub height: u32,
     #[arg(short, long, default_value_t = 60)]
-    pub fps: u32,
+    pub fps: u32, // TODO: check for fps in stream configuration
     #[arg(short, long)]
     pub name: Option<String>,
+    #[arg(long)]
+    pub format: Option<String>,
 }
 
 fn main() -> color_eyre::Result<()> {
@@ -38,6 +40,7 @@ fn main() -> color_eyre::Result<()> {
         Box::new(bgr::BgrStream),
         Box::new(rgb::RgbStream),
         Box::new(yuyv::YuyvStream),
+        // TODO: Support MJPEG as alternative to YUYV
     ];
 
     ndi::initialize()?;
@@ -59,7 +62,14 @@ fn main() -> color_eyre::Result<()> {
 
     let mut cam = cam.acquire()?;
 
-    let Some((camera_stream, mut cfg)) = stream_formats.into_iter().find_map(|stream| stream.is_supported(&cam).map(|cfg| (stream, cfg))) else {
+    let camera_stream = if let Some(format_name) = flags.format {
+        let format_name = format_name.to_lowercase();
+        stream_formats.into_iter().find_map(|stream| (stream.name() == format_name).then_some(()).and(stream.is_supported(&cam).map(|cfg| (stream, cfg))))
+    }else {
+        stream_formats.into_iter().find_map(|stream| stream.is_supported(&cam).map(|cfg| (stream, cfg)))
+    };
+
+    let Some((camera_stream, mut cfg)) = camera_stream else {
         color_eyre::eyre::bail!("No supported stream format found");
     };
 
@@ -128,10 +138,8 @@ fn main() -> color_eyre::Result<()> {
         tracing::debug!("Camera request {req:?} completed!");
         tracing::trace!("Metadata: {:#?}", req.metadata());
 
-        // Get framebuffer for our stream
         let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&stream).unwrap();
         tracing::trace!("FrameBuffer metadata: {:#?}", framebuffer.metadata());
-        // Actual encoded data will be smalled than framebuffer size, its length can be obtained from metadata.
         let bytes_used = framebuffer.metadata().unwrap().planes().get(0).unwrap().bytes_used as usize;
 
         let planes = framebuffer.data();
@@ -153,7 +161,7 @@ fn main() -> color_eyre::Result<()> {
             cfg.get_size().width as i32,
             cfg.get_size().height as i32,
             frame_info.video_type,
-            60,
+            flags.fps as i32,
             1,
             FrameFormatType::Progressive,
             0,
@@ -169,6 +177,8 @@ fn main() -> color_eyre::Result<()> {
 }
 
 trait CameraStream {
+    fn name(&self) -> &'static str;
+
     fn is_supported(&self, camera: &Camera) -> Option<CameraConfiguration>;
 
     fn capture_frame(&self, configuration: &StreamConfigurationRef, data: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo>;

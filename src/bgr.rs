@@ -9,6 +9,10 @@ use super::{supports_configuration, CameraStream, FrameInfo};
 pub struct BgrStream;
 
 impl CameraStream for BgrStream {
+    fn name(&self) -> &'static str {
+        "bgr"
+    }
+
     fn is_supported(&self, camera: &Camera) -> Option<CameraConfiguration> {
         supports_configuration(camera, PixelFormat::from_str("BGR888").unwrap())
     }
