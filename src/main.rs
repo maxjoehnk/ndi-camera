@@ -1,3 +1,4 @@
+use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 use clap::Parser;
 use color_eyre::eyre::Context;
@@ -15,11 +16,14 @@ use ndi::{FourCCVideoType, FrameFormatType, VideoData};
 use tracing_subscriber::fmt;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use crate::buffer::DoubleBuffer;
 
 mod rgb;
 mod bgr;
 mod yuyv;
 mod mjpeg;
+mod buffer;
+mod ndi_sender;
 
 #[derive(Debug, Clone, Parser)]
 #[command(version)]
@@ -124,12 +128,9 @@ fn main() -> color_eyre::Result<()> {
         cam.queue_request(req).map_err(|(_, e)| e)?;
     }
 
-    let ndi_sender = ndi::Send::new()?;
+    let ndi_sender = ndi_sender::NdiSender::new(cfg.get_size(), flags.fps)?;
 
-    let mut buffer_a = vec![0; cfg.get_size().width as usize * cfg.get_size().height as usize * 4];
-    let mut buffer_b = vec![0; cfg.get_size().width as usize * cfg.get_size().height as usize * 4];
-
-    let mut i = 0u32;
+    let mut buffer = DoubleBuffer::new(cfg.get_size());
 
     let mut last_capture = std::time::Instant::now();
 
@@ -137,62 +138,52 @@ fn main() -> color_eyre::Result<()> {
         let mut req = rx.recv_timeout(Duration::from_secs(10))?;
         tracing::debug!("Took {:?} since last capture", last_capture.elapsed());
 
-        let active_buffer = if i % 2 == 0 {
-            &mut buffer_a
-        } else {
-            &mut buffer_b
+        let frame_data = {
+            let instant = std::time::Instant::now();
+
+            tracing::debug!("Camera request {req:?} completed!");
+            tracing::trace!("Metadata: {:#?}", req.metadata());
+
+            let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&stream).unwrap();
+            tracing::trace!("FrameBuffer metadata: {:#?}", framebuffer.metadata());
+            let frame_metadata_status = framebuffer.metadata().unwrap().status();
+            if frame_metadata_status != FrameMetadataStatus::Success {
+                tracing::error!("Frame metadata status: {:?}", frame_metadata_status);
+                req.reuse(ReuseFlag::REUSE_BUFFERS);
+                cam.queue_request(req).map_err(|(_, e)| e)?;
+
+                continue;
+            }
+            let bytes_used = framebuffer.metadata().unwrap().planes().get(0).unwrap().bytes_used as usize;
+
+            let planes = framebuffer.data();
+            tracing::trace!("Data Planes: {:?}", planes.len());
+            let frame_data = planes.get(0).unwrap();
+            tracing::debug!("Frame captured in {:?}", instant.elapsed());
+
+            &frame_data[..bytes_used]
         };
 
-        let instant = std::time::Instant::now();
+        let frame_info = {
+            let instant = std::time::Instant::now();
+            // TODO: Can we run this conversion and sending to ndi in the background as well to reduce latency?
+            let frame_info = camera_stream.convert_frame(&cfg, frame_data, &mut buffer)?;
+            tracing::debug!("Converted to {:?} in {:?}", frame_info.video_type, instant.elapsed());
 
-        tracing::debug!("Camera request {req:?} completed!");
-        tracing::trace!("Metadata: {:#?}", req.metadata());
-
-        let framebuffer: &MemoryMappedFrameBuffer<FrameBuffer> = req.buffer(&stream).unwrap();
-        tracing::trace!("FrameBuffer metadata: {:#?}", framebuffer.metadata());
-        let frame_metadata_status = framebuffer.metadata().unwrap().status();
-        if frame_metadata_status != FrameMetadataStatus::Success {
-            tracing::error!("Frame metadata status: {:?}", frame_metadata_status);
-            req.reuse(ReuseFlag::REUSE_BUFFERS);
-            cam.queue_request(req).map_err(|(_, e)| e)?;
-
-            continue;
-        }
-        let bytes_used = framebuffer.metadata().unwrap().planes().get(0).unwrap().bytes_used as usize;
-
-        let planes = framebuffer.data();
-        tracing::trace!("Data Planes: {:?}", planes.len());
-        let frame_data = planes.get(0).unwrap();
-        tracing::debug!("Frame captured in {:?}", instant.elapsed());
-
-        let instant = std::time::Instant::now();
-
-        let frame_info = camera_stream.convert_frame(&cfg, &frame_data[..bytes_used], active_buffer)?;
-
-        tracing::debug!("Converted to {:?} in {:?}", frame_info.video_type, instant.elapsed());
+            frame_info
+        };
 
         req.reuse(ReuseFlag::REUSE_BUFFERS);
         cam.queue_request(req).map_err(|(_, e)| e)?;
 
-        let instant = std::time::Instant::now();
+        {
+            let instant = std::time::Instant::now();
+            ndi_sender.send(&mut buffer, &frame_info)?;
+            tracing::debug!("Sent to NDI in {:?}", instant.elapsed());
+        }
 
-        let video_data = VideoData::from_buffer(
-            cfg.get_size().width as i32,
-            cfg.get_size().height as i32,
-            frame_info.video_type,
-            flags.fps as i32,
-            1,
-            FrameFormatType::Progressive,
-            0,
-            frame_info.stride as i32,
-            None,
-            active_buffer
-        );
-        ndi_sender.send_video_async(&video_data);
-
-        tracing::debug!("Sent to NDI in {:?}", instant.elapsed());
         last_capture = std::time::Instant::now();
-        (i, _) = i.overflowing_add(1);
+        buffer.swap();
     }
 }
 
