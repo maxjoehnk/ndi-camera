@@ -16,7 +16,7 @@ impl CameraStream for MjpegStream {
         supports_configuration(camera, PixelFormat::from_str("MJPEG").unwrap())
     }
 
-    fn capture_frame(&self, cfg: &StreamConfigurationRef, frame: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo> {
+    fn convert_frame(&self, cfg: &StreamConfigurationRef, frame: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo> {
         let rgba_stride = cfg.get_size().width * 4;
 
         let image = turbojpeg::decompress(frame, turbojpeg::PixelFormat::RGBX)?;

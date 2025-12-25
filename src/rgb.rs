@@ -17,7 +17,7 @@ impl CameraStream for RgbStream {
         supports_configuration(camera, PixelFormat::from_str("RGB888").unwrap())
     }
 
-    fn capture_frame(&self, cfg: &StreamConfigurationRef, frame: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo> {
+    fn convert_frame(&self, cfg: &StreamConfigurationRef, frame: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo> {
         let rgb_stride = cfg.get_size().width * 3;
         let rgba_stride = cfg.get_size().width * 4;
 

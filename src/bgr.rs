@@ -17,7 +17,7 @@ impl CameraStream for BgrStream {
         supports_configuration(camera, PixelFormat::from_str("BGR888").unwrap())
     }
 
-    fn capture_frame(&self, cfg: &StreamConfigurationRef, frame: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo> {
+    fn convert_frame(&self, cfg: &StreamConfigurationRef, frame: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo> {
         let bgr_stride = cfg.get_size().width * 3;
         let bgra_stride = cfg.get_size().width * 4;
 

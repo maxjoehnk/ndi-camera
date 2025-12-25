@@ -18,7 +18,7 @@ impl CameraStream for YuyvStream {
         supports_configuration(camera, PixelFormat::from_str("YUYV").unwrap())
     }
 
-    fn capture_frame(&self, cfg: &StreamConfigurationRef, frame: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo> {
+    fn convert_frame(&self, cfg: &StreamConfigurationRef, frame: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo> {
         let rgb_stride = cfg.get_size().width * 4;
 
         let yuv_image = YuvPackedImage {

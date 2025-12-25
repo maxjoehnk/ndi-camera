@@ -126,13 +126,22 @@ fn main() -> color_eyre::Result<()> {
 
     let ndi_sender = ndi::Send::new()?;
 
-    let mut buffer = vec![0; cfg.get_size().width as usize * cfg.get_size().height as usize * 4];
+    let mut buffer_a = vec![0; cfg.get_size().width as usize * cfg.get_size().height as usize * 4];
+    let mut buffer_b = vec![0; cfg.get_size().width as usize * cfg.get_size().height as usize * 4];
+
+    let mut i = 0u32;
 
     let mut last_capture = std::time::Instant::now();
 
     loop {
         let mut req = rx.recv_timeout(Duration::from_secs(10))?;
         tracing::debug!("Took {:?} since last capture", last_capture.elapsed());
+
+        let active_buffer = if i % 2 == 0 {
+            &mut buffer_a
+        } else {
+            &mut buffer_b
+        };
 
         let instant = std::time::Instant::now();
 
@@ -154,11 +163,11 @@ fn main() -> color_eyre::Result<()> {
         let planes = framebuffer.data();
         tracing::trace!("Data Planes: {:?}", planes.len());
         let frame_data = planes.get(0).unwrap();
-
         tracing::debug!("Frame captured in {:?}", instant.elapsed());
+
         let instant = std::time::Instant::now();
 
-        let frame_info = camera_stream.capture_frame(&cfg, &frame_data[..bytes_used], &mut buffer)?;
+        let frame_info = camera_stream.convert_frame(&cfg, &frame_data[..bytes_used], active_buffer)?;
 
         tracing::debug!("Converted to {:?} in {:?}", frame_info.video_type, instant.elapsed());
 
@@ -177,12 +186,13 @@ fn main() -> color_eyre::Result<()> {
             0,
             frame_info.stride as i32,
             None,
-            &mut buffer,
+            active_buffer
         );
-        ndi_sender.send_video(&video_data);
+        ndi_sender.send_video_async(&video_data);
 
         tracing::debug!("Sent to NDI in {:?}", instant.elapsed());
         last_capture = std::time::Instant::now();
+        (i, _) = i.overflowing_add(1);
     }
 }
 
@@ -191,7 +201,7 @@ trait CameraStream {
 
     fn is_supported(&self, camera: &Camera) -> Option<CameraConfiguration>;
 
-    fn capture_frame(&self, configuration: &StreamConfigurationRef, data: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo>;
+    fn convert_frame(&self, configuration: &StreamConfigurationRef, data: &[u8], target_buffer: &mut [u8]) -> color_eyre::Result<FrameInfo>;
 }
 
 pub struct FrameInfo {
